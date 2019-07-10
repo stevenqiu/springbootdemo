@@ -1,0 +1,258 @@
+package com.softcit.mdm.server.controller.file;
+
+import com.alibaba.fastjson.JSONObject;
+import com.softcit.mdm.server.BaseController.BaseController;
+import com.softcit.mdm.server.entity.TpUmsUsers;
+import com.softcit.mdm.server.entity.TsMdmFileInfo;
+import com.softcit.mdm.server.entity.TsMdmListdisplay;
+import com.softcit.mdm.server.entity.param.PageReturnParam;
+import com.softcit.mdm.server.entity.param.TsMdmFileInfoParam;
+import com.softcit.mdm.server.entity.utils.FileUtils;
+import com.softcit.mdm.server.entity.utils.PageUtils;
+import com.softcit.mdm.server.service.file.TsMdmFileInfoService;
+import com.softcit.mdm.server.service.listdisplay.TsMdmListdisplayService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Controller;
+import org.springframework.ui.Model;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
+
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.HttpSession;
+import java.io.*;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.zip.ZipOutputStream;
+
+@RequestMapping(value = "/file")
+@Controller
+public class TsMdmFileInfoController extends BaseController {
+
+    @Autowired
+    private TsMdmFileInfoService tsMdmFileInfoService;
+
+    @Autowired
+    private TsMdmListdisplayService tsMdmListdisplayService;
+
+    @Value("${filePath}")
+    private String path;
+
+    /**
+     * 功能首页
+     *
+     * @param model
+     * @return
+     */
+    @RequestMapping(value = "/index")
+    public String toIndex(Model model) {
+        try {
+            List<TsMdmListdisplay> params = tsMdmListdisplayService.selectTableList(TsMdmFileInfo.class);
+            model.addAttribute("params", params);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return "file/fileList";
+    }
+
+    /**
+     * 数据列表刷新
+     *
+     * @param param
+     * @param request
+     * @param tpUmsUsers
+     * @return
+     * @throws Exception
+     */
+    @RequestMapping(value = "/list", method = RequestMethod.POST)
+    @ResponseBody
+    public PageReturnParam showModelList(TsMdmFileInfoParam param, HttpServletRequest request, @SessionAttribute TpUmsUsers tpUmsUsers) throws Exception {
+        param = PageUtils.convertRequestToPageParam(param, request);
+        param.setCompanyId(tpUmsUsers.getCompanyId());
+        List<TsMdmFileInfo> records = tsMdmFileInfoService.pageBySelective(param);
+        Integer size = 0;
+        PageReturnParam<TsMdmFileInfo> result = new PageReturnParam<>();
+        result.setsEcho(Integer.parseInt(param.getsEcho()) + 1);
+        if (records.size() > 0) {
+            size = records.get(0).getRowCount();
+        }
+        result.setiTotalRecords(size);
+        result.setiTotalDisplayRecords(size);
+        result.setAaData(records);
+
+        return result;
+    }
+
+    /**
+     * 新增（编辑）保存
+     *
+     * @param record
+     * @param tpUmsUsers
+     * @return
+     */
+    @RequestMapping(value = "/save", method = RequestMethod.POST)
+    @ResponseBody
+    public void saveModel(TsMdmFileInfo record, @SessionAttribute TpUmsUsers tpUmsUsers) throws Exception {
+        record.setFilePath(path);
+        String fileName = record.getFileName();
+        String[] names = fileName.split("\\.");
+        record.setFileName(names[0]);
+        record.setFileType(names[1].toUpperCase());
+        tsMdmFileInfoService.saveByPrimaryKeySelective(record, tpUmsUsers);
+    }
+
+    /**
+     * 页面编辑获取数据
+     *
+     * @param id
+     * @return
+     */
+    @RequestMapping(value = "/edit/{id}", method = RequestMethod.GET)
+    @ResponseBody
+    public TsMdmFileInfo editModel(@PathVariable Long id) throws Exception {
+        return tsMdmFileInfoService.selectByPrimaryKey(id);
+    }
+
+    /**
+     * （批量）删除数据
+     *
+     * @param ids
+     * @return
+     */
+    @RequestMapping(value = "/delete", method = RequestMethod.GET)
+    @ResponseBody
+    public void deleteModel(@RequestParam("ids[]") List<Long> ids) throws Exception {
+        tsMdmFileInfoService.deleteByPrimaryKey(ids);
+    }
+
+    @RequestMapping(value = "/upload", method = RequestMethod.POST)
+    @ResponseBody
+    public Map uploadFile(@RequestParam("file") MultipartFile file) throws Exception {
+        Map<String, String> map = new HashMap<>();
+        SimpleDateFormat format = new SimpleDateFormat("yyyyMMddHHmmssS");
+        String name = file.getOriginalFilename();
+        String[] names = name.split("\\.");
+        String fileName = names[0] + format.format(new Date()) + "." + names[1];
+        FileUtils.uploadFile(file.getBytes(), path, fileName);
+        map.put("fileName", fileName);
+        return map;
+    }
+
+    @RequestMapping(value = "/download/{id}", method = RequestMethod.GET)
+    public void downloadFile(@PathVariable Long id, HttpServletResponse response) {
+        InputStream bis = null;
+        OutputStream os = null;
+        try {
+            TsMdmFileInfo tsMdmFileInfo = tsMdmFileInfoService.selectByPrimaryKey(id);
+            String filePath = tsMdmFileInfo.getFilePath();
+            String fileName = tsMdmFileInfo.getFileName() + "." + tsMdmFileInfo.getFileType().toLowerCase();
+            File file = new File(filePath, fileName);
+            if (file.exists() && file.isFile()) {
+                response.reset();
+                os = response.getOutputStream();
+                response.setContentType("application/octet-stream");
+                response.addHeader("Content-Disposition", "attachment;fileName=" + new String(file.getName().getBytes("UTF-8"), "ISO-8859-1"));// 设置文件名
+
+                bis = new BufferedInputStream(new FileInputStream(file));
+                byte[] buffer = new byte[2048];
+                long size = 0L;
+                while (size < file.length()) {
+                    int i = bis.read(buffer, 0, 2048);
+                    size += i;
+                    os.write(buffer, 0, i);
+                }
+                os.flush();
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            if (os != null) {
+                try {
+                    os.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+            if (bis != null) {
+                try {
+                    bis.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+
+    @RequestMapping(value = "/zip")
+    public void downloadZip(HttpSession session, HttpServletRequest request, HttpServletResponse response) {
+        InputStream bis = null;
+        ZipOutputStream zos = null;
+        OutputStream os = null;
+        try {
+            List<Long> ids = JSONObject.parseArray(request.getParameter("ids"), Long.class);
+
+            String zipPath = session.getServletContext().getRealPath("/") + "DataZip.zip";
+            File zip = new File(zipPath);
+            zip.createNewFile();
+
+            response.reset();
+            os = response.getOutputStream();
+            response.setContentType("application/octet-stream");
+            response.addHeader("Content-Disposition", "attachment;fileName=" + new String(zip.getName().getBytes("UTF-8"), "ISO-8859-1"));// 设置文件名
+
+            //创建zip文件输出流
+            zos = new ZipOutputStream(new FileOutputStream(zip));
+
+            for (Long id : ids) {
+                TsMdmFileInfo tsMdmFileInfo = tsMdmFileInfoService.selectByPrimaryKey(id);
+                String filePath = tsMdmFileInfo.getFilePath();
+                String fileName = tsMdmFileInfo.getFileName() + "." + tsMdmFileInfo.getFileType().toLowerCase();
+                File file = new File(filePath, fileName);
+                if (file.exists()) {
+                    FileUtils.zipFile(file, zos);
+                }
+                zos.close();
+
+                //将打包后的文件写到客户端，输出的方法同上，使用缓冲流输出
+                bis = new BufferedInputStream(new FileInputStream(zipPath));
+                byte[] buffer = new byte[4096];
+                long size = 0L;
+                while (size < file.length()) {
+                    int i = bis.read(buffer, 0, 4096);
+                    size += i;
+                    os.write(buffer, 0, i);
+                }
+                os.flush();
+                zip.delete();
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            if (os != null) {
+                try {
+                    os.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+            if (zos != null) {
+                try {
+                    zos.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+            if (bis != null) {
+                try {
+                    bis.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+}
